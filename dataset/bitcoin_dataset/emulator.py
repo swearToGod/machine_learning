@@ -26,19 +26,20 @@ def GetX(t, cu, tbl):
 
 
 class ControlCenter(object):
-    def __init__(self, buythresh, sellthupthresh, selldownthresh):
+    def __init__(self, buythresh, sellthupthresh, selldownthresh, tbls):
         self.buythresh = buythresh
         self.sellupthresh = sellthupthresh
         self.selldownthresh = selldownthresh
         self.cx = sqlite3.connect('digitalcash.db')
         self.cu = self.cx.cursor()
-        self.comm_coins_tables = ['huobipro_BCH', 'huobipro_BTC', 'huobipro_EOS', 'huobipro_ETH',
-                  'huobipro_LTC', 'huobipro_OMG', 'huobipro_XRP', 'huobipro_ZEC'] # 主区币列表
+        self.comm_coins_tables = tbls # 主区币列表
         self.btc_coins_tables = list() # BTC区币列表
         self.comm_coins = dict() # 主区币种数量
         self.comm_coins_price = dict()
+        self.comm_coins_price_max = dict()
         self.btc_coins = dict() # BTC区币种数量
         self.btc_coins_price = dict()
+        self.btc_coins_price_max = dict()
         self.dollaramount = 0.0
         self.btcamount = 0.0
 
@@ -47,9 +48,11 @@ class ControlCenter(object):
         for tbl in self.comm_coins_tables:
             self.comm_coins[tbl] = 0.0
             self.comm_coins_price[tbl] = 0.0
+            self.comm_coins_price_max[tbl] = 0.0
         for tbl in self.btc_coins_tables:
             self.btc_coins[tbl] = 0.0
             self.btc_coins_price[tbl] = 0.0
+            self.btc_coins_price_max[tbl] = 0.0
         self.dollaramount = dollaramount
         self.btcamount = btcamount
 
@@ -62,7 +65,7 @@ class ControlCenter(object):
             if curmaxt < self.maxt:
                 self.maxt = curmaxt
         self.maxt -= 180
-        self.gtime = self.maxt - 888600 # 预测3天余量
+        self.gtime = self.maxt - 88860 * 10 # 预测3天余量
 
 
     def buy(self, coinid, amount = -1.0):
@@ -78,6 +81,7 @@ class ControlCenter(object):
             self.comm_coins[coinid] += amount * 0.998 / curprice # 火币费率
             self.dollaramount -= amount
             self.comm_coins_price[coinid] = curprice
+            self.comm_coins_price_max[coinid] = curprice
         elif coinid in self.btc_coins_tables:
             if self.btcamount < 0.00001:
                 return
@@ -88,6 +92,7 @@ class ControlCenter(object):
             self.btc_coins[coinid] += amount * 0.998 / curprice # 火币费率
             self.btcamount -= amount
             self.btc_coins_price[coinid] = curprice
+            self.btc_coins_price_max[coinid] = curprice
         self.optime += 1
 
         # print 'buy %s' % time.ctime(self.gtime), self.comm_coins, self.dollaramount
@@ -105,6 +110,7 @@ class ControlCenter(object):
             self.dollaramount += amount * 0.998 * curprice # 火币费率
             self.comm_coins[coinid] -= amount
             self.comm_coins_price[coinid] = 0.0
+            self.comm_coins_price_max[coinid] = 0.0
         elif coinid in self.btc_coins_tables:
             if self.btc_coins[coinid] < 1.0:
                 return
@@ -115,6 +121,7 @@ class ControlCenter(object):
             self.btcamount += amount * 0.998 * curprice # 火币费率
             self.btc_coins[coinid] -= amount
             self.btc_coins_price[coinid] = 0.0
+            self.btc_coins_price_max[coinid] = 0.0
         self.optime += 1
 
         # print 'sell %s' % time.ctime(self.gtime), self.comm_coins, self.dollaramount
@@ -127,7 +134,8 @@ class ControlCenter(object):
             amount = self.comm_coins[coinid]
             self.dollaramount += amount * 0.998 * curprice # 火币费率
             self.comm_coins[coinid] -= amount
-            self.comm_coins_price[coinid] = 0
+            self.comm_coins_price[coinid] = 0.0
+            self.comm_coins_price_max[coinid] = 0.0
         for coinid in self.btc_coins_tables:
             if self.btc_coins[coinid] < 1.0:
                 continue
@@ -136,6 +144,7 @@ class ControlCenter(object):
             self.btcamount += amount * 0.998 * curprice # 火币费率
             self.btc_coins[coinid] -= amount
             self.btc_coins_price[coinid] = 0
+            self.btc_coins_price_max[coinid] = 0
         self.optime += 1
 
     def get_policy_result(self, coinid, tl):
@@ -155,13 +164,26 @@ class ControlCenter(object):
         op, = self.cu.execute('select o from %s where t==%d' % (coinid, (self.gtime - tl))).fetchone() # 开盘价
         cp, = self.cu.execute('select c from %s where t==%d' % (coinid, (self.gtime - 60))).fetchone() # 收盘价
         bp = 0.0
+        mp = 0.0
         if coinid in self.comm_coins_tables:
             bp = self.comm_coins_price[coinid] # 买入价
+            if op > self.comm_coins_price_max[coinid]:
+                self.comm_coins_price_max[coinid] = op
+            if cp > self.comm_coins_price_max[coinid]:
+                self.comm_coins_price_max[coinid] = cp
+            mp = self.comm_coins_price_max[coinid]
         elif coinid in self.btc_coins_tables:
             bp = self.btc_coins_price[coinid]
+            if op > self.btc_coins_price_max[coinid]:
+                self.btc_coins_price_max[coinid] = op
+            if cp > self.btc_coins_price_max[coinid]:
+                self.btc_coins_price_max[coinid] = cp
+            mp = self.btc_coins_price_max[coinid]
         if cp / op > self.buythresh: # 涨到一定程度则入手
             return 1
-        elif bp > 0.0 and (cp / bp > self.sellupthresh or cp / bp < self.selldownthresh): # 已经入手且降到一定程度则出手
+        #elif bp > 0.0 and (cp / bp > self.sellupthresh or cp / bp < self.selldownthresh): # 已经入手且涨到一定程度则出手
+        #    return -1
+        elif mp > 0.0 and cp / mp < self.selldownthresh: # 已经入手且涨到一定程度则出手
             return -1
         return 0
 
@@ -169,6 +191,7 @@ class ControlCenter(object):
         gain_all = self.runloop(tl) # 全段增益
         # gain_down = self.runloop(down_begin, down_end, tl)# 下降段增益
         print self.buythresh, self.sellupthresh, self.selldownthresh, gain_all[0], gain_all[1]
+        return gain_all[0]
 
     def runloop(self, tl):
         self.inittime()
@@ -230,6 +253,7 @@ import threadpool
 if __name__ == '__main__':
     pool = threadpool.ThreadPool(2)
     args = list()
+    '''
     for buythresh in frange(1.00, 1.05, 0.01):
         for sellupthresh in frange(1.01, 1.05, 0.01):
             for selldownthresh in frange(0.99, 0.95, -0.01):
@@ -237,4 +261,9 @@ if __name__ == '__main__':
     requests = threadpool.makeRequests(lambda carg: ControlCenter(buythresh=carg['arg1'], sellthupthresh=carg['arg2'], selldownthresh=carg['arg3']).getgain(60), args)
     [pool.putRequest(req) for req in requests]
     pool.wait()
-
+    '''
+    for buythresh in frange(1.010, 1.001, -0.001):
+        for selldownthresh in frange(0.90, 0.98, 0.01):
+            tbls = ['huobipro_EOS', 'huobipro_ETH', 'huobipro_OMG', 'huobipro_XRP', 'huobipro_ZEC']
+            ControlCenter(buythresh, 0.0, selldownthresh, tbls).getgain(60)
+# 1.006 0.0 0.92 1080 1.35089288825

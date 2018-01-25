@@ -9,18 +9,19 @@ from sklearn.ensemble import *
 from sklearn.gaussian_process import *
 from sklearn.svm import *
 from sklearn.naive_bayes import *
-from sklearn.preprocessing import *
+1
 from sklearn.cross_validation import train_test_split
 from sklearn.metrics import *
 from sklearn.neural_network import *
 from sklearn.model_selection import *
 from sklearn.externals import joblib
-
+from sklearn.preprocessing import *
 import pandas as pd
 import numpy as np
 import sqlite3
 import time
 import threadpool
+import math
 import os
 
 '''
@@ -33,7 +34,7 @@ import os
 
 import random
 
-def learn_from_data(X, y, x_last):
+def learn_from_data_rf(X, y, x_last):
     pipe = Pipeline([['sc', StandardScaler()], ['clf', RandomForestRegressor(n_estimators=66)]])
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1)  # 测试集占10%
     pipe.fit(X_train, y_train)
@@ -43,16 +44,34 @@ def learn_from_data(X, y, x_last):
     y_last = pipe.predict(x_last)[0]
     return y_last[0], y_last[1], y_last[2], y_last[3], pipe
 
-def GetX(t, cu, tbl):
-    cmdx = 'select avg(o), avg(c), max(h), min(l), sum(v) from %s where t >= %d and t < %d'
+def learn_from_data_mlp(X, y, x_last):
+    regressor = MLPRegressor(hidden_layer_sizes=(52, 20), max_iter=1000, activation = "tanh", solver="lbfgs")
+    pipe = Pipeline([['sc', StandardScaler()], ['clf', regressor]])
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1)  # 测试集占10%
+    pipe.fit(X_train, y_train)
+    y_pred = pipe.predict(X_test)
+    precision = explained_variance_score(y_test, y_pred)
+    print('Accuraty:score=%f' % (precision))
+    y_last = pipe.predict(x_last)[0]
+    return y_last[0], y_last[1], y_last[2], y_last[3], pipe
+
+def GetX(t, cu, tbl, interval):
+    cmdx = 'select avg(o), avg(c), max(h), min(l) from %s where t >= %d and t < %d'
     x = list()
-    # 30个因子
+    # 24个因子
+#    x += list(cu.execute(cmdx % (tbl, t - 300, t)).fetchone())  # 前1个5分钟
+#    x += list(cu.execute(cmdx % (tbl, t - 10800, t - 300)).fetchone())  # 前1个3小时
+#    x += list(cu.execute(cmdx % (tbl, t - 21600, t - 10800)).fetchone())  # 前2个3小时
+#    x += list(cu.execute(cmdx % (tbl, t - 32400, t - 21600)).fetchone())  # 前3个3小时
+#    x += list(cu.execute(cmdx % (tbl, t - 43200, t - 32400)).fetchone())  # 前4个3小时
+#    x += list(cu.execute(cmdx % (tbl, t - 54000, t - 43200)).fetchone())  # 前5个3小时
+
     x += list(cu.execute(cmdx % (tbl, t - 300, t)).fetchone())  # 前1个5分钟
-    x += list(cu.execute(cmdx % (tbl, t - 10800, t - 300)).fetchone())  # 前1个3小时
-    x += list(cu.execute(cmdx % (tbl, t - 21600, t - 10800)).fetchone())  # 前2个3小时
-    x += list(cu.execute(cmdx % (tbl, t - 32400, t - 21600)).fetchone())  # 前3个3小时
-    x += list(cu.execute(cmdx % (tbl, t - 43200, t - 32400)).fetchone())  # 前4个3小时
-    x += list(cu.execute(cmdx % (tbl, t - 54000, t - 43200)).fetchone())  # 前5个3小时
+    x += list(cu.execute(cmdx % (tbl, t - interval / 5, t - 300)).fetchone())  # 前1个3小时
+    x += list(cu.execute(cmdx % (tbl, t - interval * 2 / 5, t - interval / 5)).fetchone())  # 前2个3小时
+    x += list(cu.execute(cmdx % (tbl, t - interval * 3 / 5, t - interval * 2 / 5)).fetchone())  # 前3个3小时
+    x += list(cu.execute(cmdx % (tbl, t - interval * 4 / 5, t - interval * 3 / 5)).fetchone())  # 前4个3小时
+    x += list(cu.execute(cmdx % (tbl, t - interval, t - interval * 4 / 5)).fetchone())  # 前5个3小时
 
     for i in range(0, len(x)):
         if x[i] is None:  # 用第一个合法数据填补缺失值
@@ -91,7 +110,94 @@ def LearnFromPrice(args):
     cx = sqlite3.connect('digitalcash.db')
     cu = cx.cursor()
 
+    '''
+    ###################################预测后一小时######################################
+    X = list()
+    y = list()  # 预测未来半天最高点/最低点/及最低点与最高点时间差
+
+    tbl = site.replace('.', '').replace('-', '') + '_' + coinname
+
+    maxt, mint, = cu.execute('select max(t), min(t) from %s' % tbl).fetchone()
+    maxt_, mint_ = maxt - 3600, mint + 3600  # 修正
+    count, = cu.execute('select count(*) from %s' % tbl).fetchone()
+    if count < 30000:  # 数据量过少不预测
+        return
+
+    curtbl = site.replace('.', '').replace('-', '') + '_' + coinname
+    ratio = -1.0
+    for t in range(mint_, maxt_, 60):  # 1min为单位
+        x = GetX(t, cu, tbl, 3600)
+        if x is None:
+            continue
+        # 搜索区间内高点
+        tmin, min_ = cu.execute('select t, min(l) from %s where t >= %d and t < %d' % (curtbl, t, t + 3600)).fetchone()
+        # 搜索最低点之后的相对最高点
+        if min_ is None:
+            continue
+        tmax, max_ = cu.execute('select t, max(h) from %s where t >= %d and t < %d' % (curtbl, tmin, t + 3600)).fetchone()
+        if max_ is None:
+            continue
+        X.append(x)
+        if ratio < 0.0:
+            ratio = math.pow(10, int(math.log(x[0], 10)))
+        y.append([min_ / ratio, max_ / ratio, (tmin - t) / 1000.0, (tmax - tmin) / 1000.0]) # 尽量归一化
+        # 预测最小值，相对最大值，最小值时间，相对最大值时间
+    x_last = GetX(maxt, cu, tbl, 3600)
+    if x_last is None:  # 数据不全不预测
+        return
+
+    cur = cu.execute('select c from %s where t = %d' % (curtbl, maxt)).fetchone()[0]
+    print '\n%s Cur=%f dataset=%d' % (curtbl, cur, len(X))
+
+    pmin, pmax, pmint, pdifft, pipe = learn_from_data_rf(np.array(X) / ratio, np.array(y), np.array([x_last]) / ratio)
+    print 'Predict %s %s~%s:predict=min=%f max=%f growth=%f mintime=%fhour reltime=%fhour' % (coinname, time.ctime(maxt),
+                      time.ctime(maxt + 3600), pmin, pmax, (pmax - pmin) / pmin, pmint * 1000 / 3600, pdifft * 1000 / 3600)
+
+
     ###################################预测后三小时######################################
+    X = list()
+    y = list()  # 预测未来半天最高点/最低点/及最低点与最高点时间差
+
+    tbl = site.replace('.', '').replace('-', '') + '_' + coinname
+
+    maxt, mint, = cu.execute('select max(t), min(t) from %s' % tbl).fetchone()
+    maxt_, mint_ = maxt - 10800, mint + 10800  # 修正
+    count, = cu.execute('select count(*) from %s' % tbl).fetchone()
+    if count < 30000:  # 数据量过少不预测
+        return
+
+    curtbl = site.replace('.', '').replace('-', '') + '_' + coinname
+    ratio = -1.0
+    for t in range(mint_, maxt_, 60):  # 1min为单位
+        x = GetX(t, cu, tbl, 10800)
+        if x is None:
+            continue
+        # 搜索区间内高点
+        tmin, min_ = cu.execute('select t, min(l) from %s where t >= %d and t < %d' % (curtbl, t, t + 10800)).fetchone()
+        # 搜索最低点之后的相对最高点
+        if min_ is None:
+            continue
+        tmax, max_ = cu.execute('select t, max(h) from %s where t >= %d and t < %d' % (curtbl, tmin, t + 10800)).fetchone()
+        if max_ is None:
+            continue
+        X.append(x)
+        if ratio < 0.0:
+            ratio = math.pow(10, int(math.log(x[0], 10)))
+        y.append([min_ / ratio, max_ / ratio, (tmin - t) / 1000.0, (tmax - tmin) / 1000.0]) # 尽量归一化
+        # 预测最小值，相对最大值，最小值时间，相对最大值时间
+    x_last = GetX(maxt, cu, tbl, 3600)
+    if x_last is None:  # 数据不全不预测
+        return
+
+    cur = cu.execute('select c from %s where t = %d' % (curtbl, maxt)).fetchone()[0]
+    print '\n%s Cur=%f dataset=%d' % (curtbl, cur, len(X))
+
+    pmin, pmax, pmint, pdifft, pipe = learn_from_data_rf(np.array(X) / ratio, np.array(y), np.array([x_last]) / ratio)
+    print 'Predict %s %s~%s:predict=min=%f max=%f growth=%f mintime=%fhour reltime=%fhour' % (coinname, time.ctime(maxt),
+                      time.ctime(maxt + 3600), pmin, pmax, (pmax - pmin) / pmin, pmint * 1000 / 3600, pdifft * 1000 / 3600)
+    '''
+
+    ###################################预测后十五小时######################################
     X = list()
     y = list()  # 预测未来半天最高点/最低点/及最低点与最高点时间差
 
@@ -100,19 +206,13 @@ def LearnFromPrice(args):
     maxt, mint, = cu.execute('select max(t), min(t) from %s' % tbl).fetchone()
     maxt_, mint_ = maxt - 54000, mint + 54000  # 修正
     count, = cu.execute('select count(*) from %s' % tbl).fetchone()
-    if count < 15000:  # 数据量过少不预测
+    if count < 30000:  # 数据量过少不预测
         return
 
     curtbl = site.replace('.', '').replace('-', '') + '_' + coinname
-    if coinname.find('_BTC') != -1:
-        ratio = 10000
-    elif coinname in ['BTC', 'BCH', 'DASH', 'ETH']:
-        ratio = 0.00001
-    else:
-        ratio = 1
-
+    ratio = -1.0
     for t in range(mint_, maxt_, 60):  # 1min为单位
-        x = GetX(t, cu, tbl)
+        x = GetX(t, cu, tbl, 54000)
         if x is None:
             continue
         # 搜索区间内高点
@@ -124,19 +224,26 @@ def LearnFromPrice(args):
         if max_ is None:
             continue
         X.append(x)
-        y.append([min_ * ratio, max_ * ratio, (tmin - t) / 10000.0, (tmax - tmin) / 10000.0]) # 尽量归一化
+        if ratio < 0.0:
+            ratio = math.pow(10, int(math.log(x[0], 10)))
+        y.append([min_ / ratio, max_ / ratio, (tmin - t) / 10000.0, (tmax - tmin) / 10000.0]) # 尽量归一化
         # 预测最小值，相对最大值，最小值时间，相对最大值时间
-    x_last = GetX(maxt, cu, tbl)
+    x_last = GetX(maxt, cu, tbl, 54000)
     if x_last is None:  # 数据不全不预测
         return
 
     cur = cu.execute('select c from %s where t = %d' % (curtbl, maxt)).fetchone()[0]
     print '\n%s Cur=%f dataset=%d' % (curtbl, cur, len(X))
 
-    pmin, pmax, pmint, pdifft, pipe = learn_from_data(np.array(X) * ratio , np.array(y), np.array([x_last]) * ratio)
+    pmin, pmax, pmint, pdifft, pipe = learn_from_data_rf(np.array(X) / ratio, np.array(y), np.array([x_last]) / ratio)
     print 'Predict %s %s~%s:predict=min=%f max=%f growth=%f mintime=%fhour reltime=%fhour' % (coinname, time.ctime(maxt),
                       time.ctime(maxt + 54000), pmin, pmax, (pmax - pmin) / pmin, pmint * 10000 / 3600, pdifft * 10000 / 3600)
 
+    #pmin, pmax, pmint, pdifft, pipe = learn_from_data_mlp(np.array(X) * ratio, np.array(y), np.array([x_last]) * ratio)
+    #print 'Predict %s %s~%s:predict=min=%f max=%f growth=%f mintime=%fhour reltime=%fhour' % (coinname, time.ctime(maxt),
+    #                  time.ctime(maxt + 54000), pmin, pmax, (pmax - pmin) / pmin, pmint * 10000 / 3600, pdifft * 10000 / 3600)
+
+    '''
     joblib.dump(pipe, 'traindata/' + tbl + '.mac')
 
     # 更新历史预测结果
@@ -147,6 +254,7 @@ def LearnFromPrice(args):
         pcx.commit()
     except Exception as e:
         pass
+    '''
 
     cu.close()
     cx.close()
@@ -196,6 +304,7 @@ if __name__ == '__main__':
         {'arg1': 'ITC_BTC', 'arg2': 'huobiproitcbtc', 'arg3': 'huobi.pro', 'arg4': []},
         {'arg1': 'KNC_BTC', 'arg2': 'huobiprokncbtc', 'arg3': 'huobi.pro', 'arg4': []},
         {'arg1': 'LET_BTC', 'arg2': 'huobiproletbtc', 'arg3': 'huobi.pro', 'arg4': []},
+        {'arg1': 'LINK_BTC', 'arg2': 'huobiprolinkbtc', 'arg3': 'huobi.pro', 'arg4': []},
         {'arg1': 'LTC', 'arg2': 'huobiproltcusdt', 'arg3': 'huobi.pro', 'arg4': []},
         {'arg1': 'MANA_BTC', 'arg2': 'huobipromanabtc', 'arg3': 'huobi.pro', 'arg4': []},
         {'arg1': 'MCO_BTC', 'arg2': 'huobipromcobtc', 'arg3': 'huobi.pro', 'arg4': []},
