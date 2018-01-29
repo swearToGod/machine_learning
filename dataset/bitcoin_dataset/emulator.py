@@ -3,6 +3,8 @@
 # 交易模拟器
 import sqlite3
 import time
+from sklearn.externals import joblib
+import numpy as np
 
 def GetX(t, cu, tbl):
     cmdx = 'select avg(o), avg(c), max(h), min(l), sum(v) from %s where t >= %d and t < %d'
@@ -26,7 +28,7 @@ def GetX(t, cu, tbl):
 
 
 class ControlCenter(object):
-    def __init__(self, buythresh, sellthupthresh, selldownthresh, tbls):
+    def __init__(self, buythresh, sellthupthresh, selldownthresh, tbls, use5min=True):
         self.buythresh = buythresh
         self.sellupthresh = sellthupthresh
         self.selldownthresh = selldownthresh
@@ -43,6 +45,19 @@ class ControlCenter(object):
         self.dollaramount = 0.0
         self.btcamount = 0.0
 
+        self.machines = dict()
+        for tbl in tbls:
+            if use5min:
+                self.machines[tbl] = joblib.load('traindata/' + tbl + '5min.mac')
+            else:
+                self.machines[tbl] = joblib.load('traindata/' + tbl + '1min.mac')
+
+        self.ratio_ = {  # 归一化价格，提高预测精度
+            'BTC': 10000.0, 'BCH': 1000.0, 'XRP': 1.0, 'ETH': 1000.0, 'LTC': 100.0,
+            'DASH': 1000.0,  'EOS': 10.0, 'ETC': 10.0, 'OMG': 10.0, 'ZEC': 100.0,
+            'XEM': 1.0, 'ELF': 1.0, 'SMT': 0.1, 'IOST': 0.1, 'VEN': 10.0, 'QTUM': 10.0,
+            'NEO': 100.0, 'HSR': 10.0, 'CVC': 1.0, 'STORJ': 1.0, 'GNT': 1.0, 'SNT': 0.1
+        }
 
     def initmoney(self, dollaramount=0.0, btcamount=0.0):
         for tbl in self.comm_coins_tables:
@@ -65,7 +80,7 @@ class ControlCenter(object):
             if curmaxt < self.maxt:
                 self.maxt = curmaxt
         self.maxt -= 180
-        self.gtime = self.maxt - 88860 * 10 # 预测3天余量
+        self.gtime = self.maxt - 888840 # 预测3天余量
 
 
     def buy(self, coinid, amount = -1.0):
@@ -163,8 +178,18 @@ class ControlCenter(object):
         # 策略2 => 1分钟内涨幅降幅超过各自门限的多个币     均摊
         op, = self.cu.execute('select o from %s where t==%d' % (coinid, (self.gtime - tl))).fetchone() # 开盘价
         cp, = self.cu.execute('select c from %s where t==%d' % (coinid, (self.gtime - 60))).fetchone() # 收盘价
+
+        x = list()
+        # 取前2分钟做预测
+        x += list(self.cu.execute('select o, c, h, l from %s where t == %d' % (coinid, self.gtime - 60)).fetchone())
+        x += list(self.cu.execute('select o, c, h, l from %s where t == %d' % (coinid, self.gtime - 120)).fetchone())
+        ratiokey = coinid.replace('huobipro_', '')
+        X = np.array([x]) / self.ratio_[ratiokey]
+        pcp = self.machines[coinid].predict(X)[0] # predict price
+
+
         bp = 0.0
-        mp = 0.0
+        mp = 0.0 # max price
         if coinid in self.comm_coins_tables:
             bp = self.comm_coins_price[coinid] # 买入价
             if op > self.comm_coins_price_max[coinid]:
@@ -179,11 +204,15 @@ class ControlCenter(object):
             if cp > self.btc_coins_price_max[coinid]:
                 self.btc_coins_price_max[coinid] = cp
             mp = self.btc_coins_price_max[coinid]
-        if cp / op > self.buythresh: # 涨到一定程度则入手
-            return 1
+        #if cp / op > self.buythresh: # 涨到一定程度则入手
+        #    return 1
         #elif bp > 0.0 and (cp / bp > self.sellupthresh or cp / bp < self.selldownthresh): # 已经入手且涨到一定程度则出手
         #    return -1
-        elif mp > 0.0 and cp / mp < self.selldownthresh: # 已经入手且涨到一定程度则出手
+        #elif mp > 0.0 and cp / mp < self.selldownthresh: # 已经入手且涨到一定程度则出手
+        #    return -1
+        if pcp / op > self.buythresh:
+            return 1
+        elif mp > 0.0 and pcp / mp < self.selldownthresh: # 已经入手且预测会降到一定比例
             return -1
         return 0
 
@@ -262,8 +291,45 @@ if __name__ == '__main__':
     [pool.putRequest(req) for req in requests]
     pool.wait()
     '''
-    for buythresh in frange(1.010, 1.001, -0.001):
-        for selldownthresh in frange(0.90, 0.98, 0.01):
-            tbls = ['huobipro_EOS', 'huobipro_ETH', 'huobipro_OMG', 'huobipro_XRP', 'huobipro_ZEC']
-            ControlCenter(buythresh, 0.0, selldownthresh, tbls).getgain(60)
-# 1.006 0.0 0.92 1080 1.35089288825
+    #for buythresh in frange(1.010, 1.001, -0.001):
+    #    for selldownthresh in frange(0.90, 0.98, 0.01):
+    #buythresh = 1.006
+    #selldownthresh = 0.92
+    tbls = ['huobipro_EOS', 'huobipro_ETH', 'huobipro_OMG', 'huobipro_XRP', 'huobipro_ZEC']
+    #tbls = ['huobipro_GNT', 'huobipro_SNT', 'huobipro_CVC']
+
+    for buythresh in frange(1.001 , 1.009, 0.001):
+        for selldownthresh in frange(0.998, 0.985 , -0.001):
+            ControlCenter(buythresh, 0.0, selldownthresh, tbls, use5min=True).getgain(60)
+
+# 1.006 0.0 0.92 1080 1.43089288825 老方式
+
+'''新方式
+1.003 0.0 0.996 1401 12.5469636229
+1.003 0.0 0.995 1299 10.8663905117
+1.003 0.0 0.994 1175 11.8316084557
+1.003 0.0 0.993 1069 10.3887163542
+1.004 0.0 0.998 1275 11.1172858965
+1.004 0.0 0.997 1205 11.5745643027
+1.004 0.0 0.996 1111 14.3638341349
+1.004 0.0 0.995 1053 12.2681686347
+1.004 0.0 0.994 989 13.1326687923
+1.004 0.0 0.993 909 11.8009702802
+1.004 0.0 0.992 851 10.2375119841
+1.005 0.0 0.998 985 12.3365723754
+1.005 0.0 0.997 943 12.318184034
+1.005 0.0 0.996 883 14.455391234
+1.005 0.0 0.995 839 12.7748413459
+1.005 0.0 0.994 801 13.4872051462
+1.005 0.0 0.993 741 12.2346299964
+1.005 0.0 0.992 699 11.0779757715
+1.005 0.0 0.991 667 10.1121607448
+1.006 0.0 0.998 809 10.1922924324
+1.006 0.0 0.997 779 10.277665708
+1.006 0.0 0.996 737 11.3848652664
+1.006 0.0 0.995 703 10.3214453609
+1.006 0.0 0.994 675 11.1966086655
+1.006 0.0 0.993 635 10.7124143927
+1.006 0.0 0.992 597 10.2696751067
+'''
+
