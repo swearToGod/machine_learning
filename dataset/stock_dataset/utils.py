@@ -18,6 +18,7 @@ import urllib
 import urllib2
 import httplib
 import re
+from urllib import quote
 
 reload(sys)
 sys.setdefaultencoding('utf8')
@@ -66,9 +67,8 @@ def getstrforperiod(period):
     if period < 60:
         return '%dmin' % period
     period /= 60
-    if period < 24:
-        return '%dhour' % period
-        # 最大到hour
+    return '%dhour' % period
+    # 最大到hour
 
 
 def setproxy(proxy):
@@ -178,7 +178,7 @@ class AICoin(object):
         }
         try:
             url = 'https://www.aicoin.net.cn/chart/api/data/period?' + url_param
-            print(url)
+            #print(url)
             conn = httplib.HTTPConnection('127.0.0.1:9999', timeout=10)
             conn.request(method='GET', url=url, headers=headers)
             responsedata = conn.getresponse().read()
@@ -196,7 +196,7 @@ class AICoin(object):
                     break
                 url = 'https://www.aicoin.net.cn/chart/api/data/periodHistory?' + url_param + \
                       '&times=%d' % count + '&count=' + countstr
-                print(url)
+                #print(url)
                 conn = httplib.HTTPConnection('127.0.0.1:9999', timeout=10)
                 conn.request(method='POST', url=url, headers=headers)
                 responsedata = conn.getresponse().read()
@@ -218,7 +218,7 @@ class AICoin(object):
         tbl = self.get_tblname(site, symbol)
         js = self.api_query({'symbol': site + symbol, 'step': period})
         jsarr[tbl] = js
-        print(symbol)
+        #print(symbol)
 
     def get_data(self, site, period, cx):
         if site not in self.availsite:
@@ -248,7 +248,8 @@ class AICoin(object):
                         pass
                 cx.commit()
             except Exception as e:
-                print('err%s %d' % (tbl, period))
+                #print('err%s %d' % (tbl, period))
+                pass
 
 
 class CryptoCompare(object):
@@ -397,46 +398,51 @@ class CoinApi(object):
 
 class TuShareData(object):
     def __init__(self):
-        self.availperiod = [1800, 900, 300]
+        self.availperiod = [86400]
         self.lock = threading.Lock()
 
-    def stock_getter(self, code):
-        print(code)
+    def stock_getter(self, code, period_):
         tbl = '_1_' + code
 
-        self.lock.acquire()
         try:
             # 时间 开盘价 最高价 最低价 收盘价 成交量
             sql = 'create table %s (time int primary key, open double, close double, high double, low double, vol double, amount double)'
             self.cx.execute(sql % tbl)
         except Exception as e:
             pass  # Already exist
-        self.lock.release()
 
-        df_1min = ts.bar(code, conn=self.cons, freq=self.period)
-
-        self.lock.acquire()
-        for t in df_1min.index:
-            timestamp = t.value / 1000000000
-            code, open, close, high, low, vol, amount, = df_1min.loc[t]
-            try:
-                self.cx.execute('insert or ignore into %s values (?,?,?,?,?,?,?)' % tbl,
-                                (timestamp, open, close, high, low, vol, amount))
-            except Exception as e:
-                print(e)
-        self.cx.commit()
-        self.lock.release()
+        ktype = 'D'
+        if period_ == 24:
+            ktype = 'D'
+        if period_ == 168:
+            ktype = 'W'
+        if period_ == 720:
+            ktype = 'M'
+        #df_1min = ts.bar(code, conn=self.cons, freq=self.period)
+        df_1min = ts.get_hist_data(code, ktype=ktype)
+        try:
+            for t in df_1min.index:
+                timestamp = int(time.mktime(time.strptime(t, '%Y-%m-%d')))
+                open, high, close, low, vol, amount, _1, _2, _3, _4, _5, _6, _7 = df_1min.loc[t]
+                try:
+                    self.cx.execute('insert or ignore into %s values (?,?,?,?,?,?,?)' % tbl,
+                                    (timestamp, open, close, high, low, vol, amount))
+                except Exception as e:
+                    print(e)
+        except:
+            pass
 
     def get_data(self, period, cx):
-        period = getstrforperiod(period)
         self.cons = ts.get_apis()
         self.cx = cx
-        self.period = period
         df = ts.get_stock_basics()
-        pool = threadpool.ThreadPool(20)
-        args = [code for code in df.index]
-        [pool.putRequest(req) for req in threadpool.makeRequests(self.stock_getter, args)]
-        pool.wait()
+        count = 0
+        for code in df.index:
+            self.stock_getter(code, period)
+            count += 1
+            if (count % 100) == 0:
+                self.cx.commit()
+                print(count)
 
 class EastmoneyData(object):
     def __init__(self):
@@ -669,4 +675,9 @@ if __name__ == '__main__':
         cx.close()
     '''
     #EastmoneyData().get_data()
+    '''
+    period = 168# 24 168 720
+    cx = sqlite3.connect('tushare_' + getstrforperiod(period * 3600))
+    TuShareData().get_data(period, cx)
+    '''
 

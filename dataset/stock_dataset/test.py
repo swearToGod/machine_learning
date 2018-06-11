@@ -125,7 +125,7 @@ from sklearn.preprocessing import *
 
 def learn_from_data_rfr(X, y, pipe=None):
     if pipe is None:
-        regressor = RandomForestRegressor(n_estimators=1000)  # n_estimators=66
+        regressor = RandomForestRegressor(n_estimators=66)  # n_estimators=66
         pipe = Pipeline([['sc', StandardScaler()], ['clf', regressor]])
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1)  # 测试集占10%
     pipe.fit(X_train, y_train)
@@ -136,7 +136,7 @@ def learn_from_data_rfr(X, y, pipe=None):
 
 def learn_from_data_rfc(X, y, pipe=None):
     if pipe is None:
-        classifier = RandomForestClassifier(n_estimators=1000) # n_estimators=66
+        classifier = RandomForestClassifier(n_estimators=66) # n_estimators=66
         pipe = Pipeline([['sc', StandardScaler()], ['clf', classifier]])
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1)  # 测试集占10%
     pipe.fit(X_train, y_train)
@@ -301,137 +301,238 @@ def detect_wave_rfc(data, vnum, X, y, grad=1.0, valt='m,m/m', mode='learn'): # �
             X.append(x)
     return
 
-def detect_wave_rfr(data, vnum, X, y, grad=1.0, valt='m,m/m', mode='learn'): # 波浪检测
-    if valt == 'm,m/m' or valt == 'c,c/c':
-        # use mean as base, y as mean(tomorrow)/mean(today)    mean=(open+close)/2
-        # use close as base, y as close(tomorrow)/close(today)
-        i_data = list()  # index list
-        for i in range(1, len(data) - 1):
-            if (data[i + 1] - data[i]) * (data[i - 1] - data[i]) / (data[i] * data[i]) > 0.0:
-                i_data.append(i)
-        if vnum + 2 > len(i_data):
-            return
-        ibe, ien = i_data[vnum + 1], len(data)
-        if ibe >= ien:
-            return
-        if mode == 'learn':
-            for i in range(ibe, ien):
-                # 取前8个波形
+def detect_his_rfc(data, vnum, X, y, grad=1.0, mode='learn'): # 历史检测
+    # close:0 open:1 high:2 low:3 vol:4
+    ibe, ien = vnum + 1, len(data)
+    if mode == 'learn':
+        for i in range(ibe, ien):
+            try:
                 x = list()
-                for k in range(0, len(i_data)):
-                    if i_data[k] >= i - 1:
-                        k -= 1
-                        break
-                x += [data[i_data[j + 1]] / data[i_data[j]] for j in range(k - vnum - 1, k - 1)]
-                x += [data[j + 1] / data[j] for j in range(i - vnum - 1, i - 1)]
-                X.append(x)
-                y.append(data[i] / data[i - 1] - grad)
-        elif mode == 'predict':
-            i = len(data)
-            x = list()
-            for k in range(0, len(i_data)):
-                if i_data[k] >= i - 1:
-                    k -= 1
-                    break
-            x += [data[i_data[j + 1]] / data[i_data[j]] for j in range(k - vnum - 1, k - 1)]
-            x += [data[j + 1] / data[j] for j in range(i - vnum - 1, i - 1)]
-            X.append(x)
-    elif valt == 'm,h/c' or valt == 'm,l/c' or valt == 'm,c/c':
-        # m,h/c  ->  use mean as base  y as high(tomorrow)/close(today)  mean:0 high:1 close:2
-        # m,l/c  ->  use mean as base  y as low(tomorrow)/close(today)  mean:0 low:1 close:2
-        # m,c/c  ->  use mean as base  y as close(tomorrow)/close(today)  mean:0 close:1 close:2
-        i_data = list()  # index list
-        for i in range(1, len(data) - 1):
-            if (data[i + 1][0] - data[i][0]) * (data[i - 1][0] - data[i][0]) / (data[i][0] * data[i][0]) > 0.0:
-                i_data.append(i)
-        if vnum + 2 > len(i_data):
-            return
-        ibe, ien = i_data[vnum + 1], len(data)
-        if ibe >= ien:
-            return
-        if mode == 'learn':
-            for i in range(ibe, ien):
-                # 取前8个波形
-                x = list()
-                for k in range(0, len(i_data)):
-                    if i_data[k] >= i - 1:
-                        k -= 1
-                        break
-                x += [data[i_data[j + 1]][0] / data[i_data[j]][0] for j in range(k - vnum - 1, k - 1)]
                 x += [data[j + 1][0] / data[j][0] for j in range(i - vnum - 1, i - 1)]
+                y_ = data[i][0] / data[i - 1][0] > grad
                 X.append(x)
-                y.append(data[i][1] / data[i - 1][2] - grad)
-        elif mode == 'predict':
+                y.append(y_)
+            except:
+                pass
+    elif mode == 'predict':
+        try:
             i = len(data)
             x = list()
-            for k in range(0, len(i_data)):
-                if i_data[k] >= i - 1:
-                    k -= 1
-                    break
-            x += [data[i_data[j + 1]][0] / data[i_data[j]][0] for j in range(k - vnum - 1, k - 1)]
             x += [data[j + 1][0] / data[j][0] for j in range(i - vnum - 1, i - 1)]
             X.append(x)
+        except:
+            pass
     return
 
+# 股票周线参数：vnum=10 grad=?
+'''
+1.065 0.863147605083 10222 1424
+1.07 0.866080156403 10222 1299
+1.075 0.869990224829 10222 1193
+1.08 0.890518084066 10222 1075
+'''
+
+# 股票月线参数：vnum=10 grad=?
+'''
+1.135 0.854043392505 10138 1633
+1.14 0.868836291913 10138 1574
+1.145 0.849112426036 10138 1515
+1.15 0.848126232742 10138 1454
+1.155 0.876725838264 10138 1396
+1.16 0.872781065089 10138 1326
+1.165 0.87573964497 10138 1277
+1.17 0.882642998028 10138 1225
+1.175 0.892504930966 10138 1177
+'''
+
+# huobi 12小时参数：vnum=10 grad=?
+'''
+1.05 0.871128871129 10001 1404
+1.055 0.893106893107 10001 1229
+1.06 0.906093906094 10001 1069
+'''
+
+# huobi 6小时参数：vnum=10 grad=?
+'''
+1.035 0.880079286422 10081 1492
+1.04 0.883052527255 10081 1253
+1.045 0.919722497522 10081 1059
+'''
+
+# huobi 4小时参数：vnum=10 grad=?
+'''
+1.025 0.849264705882 10877 1764
+1.03 0.878676470588 10877 1448
+1.035 0.903492647059 10877 1193
+'''
+
+def detect_minN_rfc(data, vnum, X, y, mode='learn'): # 预测未来N天低点
+    # close:0 open:1 high:2 low:3 vol:4
+    ibe, ien = vnum + 1, len(data)
+    if mode == 'learn':
+        for i in range(ibe, ien - vnum):
+            try:
+                x = list()
+                x += [data[j + 1][0] / data[j][0] for j in range(i - vnum - 1, i - 1)]
+                y_ = numpy.sum([1 if data[j][0] >= data[i][0] else 0 for j in range(i - vnum / 2, i + vnum)]) >= vnum + vnum / 2
+                X.append(x)
+                y.append(y_)
+            except:
+                pass
+    elif mode == 'predict':
+        i = ien
+        try:
+            x = list()
+            x += [data[j + 1][0] / data[j][0] for j in range(i - vnum - 1, i - 1)]
+            X.append(x)
+        except:
+            pass
+
+
+# 股票周线参数：vnum=?
+'''
+4 0.880859375 1202
+5 0.895405669599 1069
+'''
+
+# 股票月线参数：vnum=?
+'''
+4 0.86771964462 1212
+5 0.913432835821 1034
+'''
+
+# huobi 12小时参数：vnum=?
+'''
+4 0.882527147088 1231
+5 0.896517412935 1105
+'''
+
+# huobi 6小时参数：vnum=?
+'''
+4 0.888779527559 1183
+5 0.906126482213 1065
+'''
+
+# huobi 4小时参数：vnum=?
+'''
+4 0.883912248629 1323
+5 0.900183150183 1134
+'''
+
 def monitor_wave(dbpath, filter, thres):
+    cu = sqlite3.connect(dbpath)
+    vnum = 10
+
+    X = list()
+    y = list()
+    for tblname in getalltable(dbpath):
+        # mean:0 high:1 close:2
+        if filter is not None and not tblname.startswith(filter):
+            continue
+        g_data = cu.execute("select time,close,open,high,low from %s order by time" % tblname).fetchall()
+        t_data = [[i[1],i[2],i[3],i[4]] for i in g_data]
+        detect_his_rfc(t_data, vnum, X, y, thres, 'learn')
+        if len(y) > 10000:
+            break
+    pipe, precision = learn_from_data_rfc(X, y)
+    cu.close()
+    return pipe
+
+def evaluate_wave(dbpath, pipe, filter, thres):
+    cu = sqlite3.connect(dbpath)
+    vnum = 10
+    for tblname in getalltable(dbpath):
+        X = list()
+        y = list()
+        X_p = list()
+        # mean:0 high:1 close:2
+        g_data = cu.execute("select time,close,open,high,low from %s order by time" % tblname).fetchall()
+        t_data = [[i[1], i[2], i[3], i[4]] for i in g_data]
+        if len(t_data) < 100:
+            continue
+        detect_his_rfc(t_data, vnum, X, y, thres, 'learn')
+        pipe, precision = learn_from_data_rfc(X, y, pipe)
+        detect_his_rfc(t_data, vnum, X_p, y, thres, 'predict')
+        if pipe.predict(X_p)[0] and precision >= 0.8 and len(y) > 20:
+            print tblname, precision, time.ctime(g_data[-1][0])
+    cu.close()
+
+def monitor_minN(dbpath, filter, vnum):
     cu = sqlite3.connect(dbpath)
 
     X = list()
     y = list()
     for tblname in getalltable(dbpath):
-        if not tblname.startswith(filter):
-            continue
         # mean:0 high:1 close:2
-        g_data = cu.execute("select time,open+close,close,close from %s order by time" % tblname).fetchall()
-        t_data = [[i[1],i[2],i[3]] for i in g_data]
-        detect_wave_rfc(t_data, 8, X, y, thres, 'm,c/c', 'learn')
-
+        if filter is not None and not tblname.startswith(filter):
+            continue
+        g_data = cu.execute("select time,close,open,high,low from %s order by time" % tblname).fetchall()
+        t_data = [[i[1],i[2],i[3],i[4]] for i in g_data]
+        detect_minN_rfc(t_data, vnum, X, y, 'learn')
+        if len(y) > 10000:
+            break
     pipe, precision = learn_from_data_rfc(X, y)
-    print precision, len(y)
-    cu.close()
+    print vnum, precision, numpy.sum([1 if i else 0 for i in y])
 
+    cu.close()
     return pipe
 
-def evaluate_wave(dbpath, pipe_c, filter, thresh):
+def evaluate_minN(dbpath, pipe, filter, vnum):
     cu = sqlite3.connect(dbpath)
+
     for tblname in getalltable(dbpath):
-        if not tblname.startswith(filter):
+        if filter is not None and not tblname.startswith(filter):
             continue
-        X_c = list()
-        y_c = list()
-        X_cp = list()
+        X = list()
+        y = list()
+        X_p = list()
         # mean:0 high:1 close:2
-        g_data = cu.execute("select time,open+close,close,close from %s order by time" % tblname).fetchall()
-        t_data = [[i[1], i[2], i[3]] for i in g_data]
-        try:
-            detect_wave_rfc(t_data, 8, X_c, y_c, thresh, 'm,c/c', 'learn')
-            pipe_c, precision = learn_from_data_rfc(X_c, y_c, pipe_c)
-            detect_wave_rfc(t_data, 8, X_cp, None, thresh, 'm,c/c', 'predict')
-            print pipe_c.predict(X_cp)[0], tblname, precision, time.ctime(g_data[-1][0])
-        except:
-            pass
+        g_data = cu.execute("select time,close,open,high,low from %s order by time" % tblname).fetchall()
+        t_data = [[i[1], i[2], i[3], i[4]] for i in g_data]
+        if len(t_data) < 100:
+            continue
+        detect_minN_rfc(t_data, vnum, X, y, 'learn')
+        pipe, precision = learn_from_data_rfc(X, y, pipe)
+        detect_minN_rfc(t_data, vnum, X_p, y, 'predict')
+        if pipe.predict(X_p)[0] and precision >= 0.85 and len(y) > 20:
+            print tblname, precision, time.ctime(g_data[-1][0])
     cu.close()
+
+import utils
+
+update = True
 
 
 dbpaths = [
-    {'d':12, 'p': 'd:\\\\project\\aicoin_12hour', 's': 1.03},
-    {'d':6, 'p': 'd:\\\\project\\aicoin_6hour', 's': 1.02},
-    {'d':4, 'p': 'd:\\\\project\\aicoin_4hour', 's': 1.01},
-    {'d':2, 'p': 'd:\\\\project\\aicoin_2hour', 's': 1.01},
-    {'d':1, 'p': 'd:\\\\project\\aicoin_1hour', 's': 1.01},
+    {'d':12, 'p': 'd:\\\\project\\aicoin_12hour', 's': 1.045, 'f':'huobipro'},
+    {'d':6, 'p': 'd:\\\\project\\aicoin_6hour', 's': 1.03, 'f':'huobipro'},
+    {'d':4, 'p': 'd:\\\\project\\aicoin_4hour', 's': 1.02, 'f':'huobipro'},
+    {'d':168, 'p': 'd:\\\\project\\tushare_168hour', 's': 1.06, 'f':None},
+    {'d':720, 'p': 'd:\\\\project\\tushare_720hour', 's': 1.13, 'f':None},
 ]
-
-import utils
 for dbpath in dbpaths:
     # update
-    period = dbpath['d'] * 3600
-    aicoin = utils.AICoin()
-    cx = sqlite3.connect('aicoin_' + utils.getstrforperiod(period))
-    aicoin.get_data('huobipro', period, cx)
-    cx.close()
-    print("handle interval:%d" % dbpath['d'])
-    # build model
-    pipe_c = monitor_wave(dbpath['p'], 'huobipro', dbpath['s'])
-    # find maximium
-    evaluate_wave(dbpath['p'], pipe_c, 'huobipro', dbpath['s'])
+    if dbpath['p'].find('aicoin') != -1 and update:
+        period = dbpath['d'] * 3600
+        aicoin = utils.AICoin()
+        cx = sqlite3.connect('aicoin_' + utils.getstrforperiod(period))
+        aicoin.get_data('huobipro', period, cx)
+        cx.close()
+    print("wave handle interval:", dbpath)
+    pipe = monitor_wave(dbpath['p'], dbpath['f'], dbpath['s'])
+    evaluate_wave(dbpath['p'], pipe, dbpath['f'], dbpath['s'])
+
+
+dbpaths = [
+    {'d':12, 'p': 'd:\\\\project\\aicoin_12hour', 's': 4, 'f':'huobipro'},
+    {'d':6, 'p': 'd:\\\\project\\aicoin_6hour', 's': 4, 'f':'huobipro'},
+    {'d':4, 'p': 'd:\\\\project\\aicoin_4hour', 's': 4, 'f':'huobipro'},
+    {'d':168, 'p': 'd:\\\\project\\tushare_168hour', 's': 4, 'f':None},
+]
+for dbpath in dbpaths:
+    # update
+    print("minN handle interval:", dbpath)
+    pipe = monitor_minN(dbpath['p'], dbpath['f'], dbpath['s'])
+    evaluate_minN(dbpath['p'], pipe, dbpath['f'], dbpath['s'])
+
 
