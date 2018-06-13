@@ -19,6 +19,7 @@ import urllib2
 import httplib
 import re
 from urllib import quote
+import os
 
 reload(sys)
 sys.setdefaultencoding('utf8')
@@ -420,8 +421,9 @@ class TuShareData(object):
             ktype = 'M'
         #df_1min = ts.bar(code, conn=self.cons, freq=self.period)
         df_1min = ts.get_hist_data(code, ktype=ktype)
+        bi = 1 if ktype in ['W', 'M'] else 0
         try:
-            for t in df_1min.index:
+            for t in df_1min.index[bi:]:
                 timestamp = int(time.mktime(time.strptime(t, '%Y-%m-%d')))
                 open, high, close, low, vol, amount, _1, _2, _3, _4, _5, _6, _7 = df_1min.loc[t]
                 try:
@@ -442,7 +444,7 @@ class TuShareData(object):
             count += 1
             if (count % 100) == 0:
                 self.cx.commit()
-                print(count)
+        self.cx.commit()
 
 class EastmoneyData(object):
     def __init__(self):
@@ -675,9 +677,10 @@ if __name__ == '__main__':
         cx.close()
     '''
     #EastmoneyData().get_data()
-    '''
-    period = 168# 24 168 720
+
+    period = 24# 24 168 720
     cx = sqlite3.connect('tushare_' + getstrforperiod(period * 3600))
     TuShareData().get_data(period, cx)
-    '''
+
+
 
